@@ -1,1 +1,112 @@
-# Desafio Técnico: Especialista de Dados I - Crédito e Cobrança PF
+# Desafio Técnico: Especialista de Dados I — Crédito e Cobrança PF
+
+## Questão 1 — Pipeline de Dados + Geração de Indicadores  
+### Arquitetura Completa: RAW → TRUSTED → VALIDAÇÕES → INDICADORES
+
+
+Este diretório reúne todos os entregáveis desenvolvidos para responder à **Questão 1**, organizada em duas partes:
+
+1. **Parte 1 — Pipeline RAW → TRUSTED e Validações de Qualidade**  
+2. **Parte 2 — Geração de Indicadores Analíticos via SQL**
+
+O objetivo é demonstrar o fluxo completo de uma **mini arquitetura de dados**, desde ingestão bruta até criação de métricas estratégicas.
+
+---
+
+# Parte 1 — Pipeline RAW → TRUSTED  
+### Ingestão, Estruturação e Validação da Base de Usuários
+
+A API pública fornece 30 usuários em JSON. Esses dados passam por três etapas fundamentais:
+
+- **RAW** (armazenamento bruto, íntegro)  
+- **TRUSTED** (dados limpos e estruturados)  
+- **Validação** (conferências automáticas de qualidade)
+
+---
+
+## Arquivos incluídos (Parte 1)
+
+| Arquivo                      | Descrição                                                              |
+|------------------------------|------------------------------------------------------------------------|
+| **etl_users.py**             | Ingestão da API, criação do banco SQLite e transformação RAW → TRUSTED |
+| **etl_users_validations.py** | Regras de validação aplicadas sobre a camada TRUSTED                   |
+| **users.db**                 | Banco SQLite contendo tabelas RAW e TRUSTED                            |
+
+---
+
+## Arquitetura do Pipeline
+
+```
+          +---------------------------+
+          |         API Pública       |
+          |    (200 usuários JSON)    |
+          +-------------+-------------+
+                        |
+                        v
+              [ ETAPA 1 - RAW ]
++-----------------------------------------------------+
+|  RAW: dados brutos, íntegros e rastreáveis          |
+|  Estrutura:                                         |
+|   - user_id                                         |
+|   - raw_json (conteúdo em JSON)                     |
++-----------------------------------------------------+
+                            |
+                            v
+               [ ETAPA 2 - TRUSTED ]
++------------------------------------------------------+
+| TRUSTED: base limpa e padronizada                    |
+| Tabelas: users, address, professional_info, bank     |
+| Atributos normalizados e estruturados                |
++------------------------------------------------------+
+                            |
+                            v
+              [ ETAPA 3 - VALIDAÇÕES ]
++------------------------------------------------------+
+| Regras verificadas:                                  |
+| - IDs duplicados                                     |
+| - Usuários sem endereço                              |
+| - Usuários sem info profissional                     |
+| - Distribuição por gênero                            |
+| - Distribuição por departamento                      |
+| - Regras de aplicabilidade (ex.: TI < 40 anos)       |
++------------------------------------------------------+
+```
+
+---
+
+# Fluxo Geral do Processo
+
+```
+┌─────────────┐     ingestão      ┌─────────────┐     transformação    ┌─────────────┐
+│    API      │ ───────────────►  │     RAW     │ ───────────────────► │   TRUSTED   │
+└─────────────┘                   └─────────────┘                      └─────────────┘
+                                              \                              
+                                               \                             validações
+                                                \──────► etl_users_validations.py
+```
+
+---
+
+# Parte 2 — Indicadores SQL
+
+Depois da criação das camadas RAW e TRUSTED, um conjunto de indicadores analíticos foi desenvolvido usando SQL, simulando uma camada **Analytics / DataMart**.
+
+Esses indicadores permitem análises estratégicas do portfólio de usuários.
+
+---
+
+## Arquivo incluído (Parte 2)
+
+| Arquivo                      | Descrição                                                                          |
+|------------------------------|------------------------------------------------------------------------------------|
+| **etl_users_indicators.sql** | Script SQL que cria uma tabela de indicadores agregados a partir da camada TRUSTED |
+
+---
+
+## Indicadores criados
+- pct_usuarios_ti -> Percentual de usuários da área de TI.  
+- idade_media     -> Média de idade.  
+- total_usuarios  -> Total de usuários.  
+- pct_menos_30    -> Percentual de usuários com menos de 30 anos. 
+
+---
