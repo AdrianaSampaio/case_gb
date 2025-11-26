@@ -1,7 +1,7 @@
 # Desafio Técnico: Especialista de Dados I — Crédito e Cobrança PF
 
 ## Questão 1 — Pipeline de Dados + Geração de Indicadores  
-### Arquitetura Completa: RAW → TRUSTED → VALIDAÇÕES → INDICADORES
+#### Arquitetura Completa: RAW → TRUSTED → VALIDAÇÕES → INDICADORES
 
 
 Este diretório reúne todos os entregáveis desenvolvidos para responder à **Questão 1**, organizada em duas partes:
@@ -13,8 +13,8 @@ O objetivo é demonstrar o fluxo completo de uma **mini arquitetura de dados**, 
 
 ---
 
-# Parte 1 — Pipeline RAW → TRUSTED  
-### Ingestão, Estruturação e Validação da Base de Usuários
+### Parte 1 — Pipeline RAW → TRUSTED  
+#### Ingestão, Estruturação e Validação da Base de Usuários
 
 A API pública fornece 30 usuários em JSON. Esses dados passam por três etapas fundamentais:
 
@@ -24,7 +24,7 @@ A API pública fornece 30 usuários em JSON. Esses dados passam por três etapas
 
 ---
 
-## Arquivos incluídos (Parte 1)
+#### Arquivos incluídos (Parte 1)
 
 | Arquivo                      | Descrição                                                              |
 |------------------------------|------------------------------------------------------------------------|
@@ -34,7 +34,7 @@ A API pública fornece 30 usuários em JSON. Esses dados passam por três etapas
 
 ---
 
-## Arquitetura do Pipeline
+#### Arquitetura do Pipeline
 
 ```
           +---------------------------+
@@ -74,7 +74,7 @@ A API pública fornece 30 usuários em JSON. Esses dados passam por três etapas
 
 ---
 
-# Fluxo Geral do Processo
+#### Fluxo Geral do Processo
 
 ```
 ┌─────────────┐     ingestão      ┌─────────────┐     transformação    ┌─────────────┐
@@ -87,7 +87,7 @@ A API pública fornece 30 usuários em JSON. Esses dados passam por três etapas
 
 ---
 
-# Parte 2 — Indicadores SQL
+### Parte 2 — Indicadores SQL
 
 Depois da criação das camadas RAW e TRUSTED, um conjunto de indicadores analíticos foi desenvolvido usando SQL, simulando uma camada **Analytics / DataMart**.
 
@@ -95,7 +95,7 @@ Esses indicadores permitem análises estratégicas do portfólio de usuários.
 
 ---
 
-## Arquivo incluído (Parte 2)
+#### Arquivo incluído (Parte 2)
 
 | Arquivo                      | Descrição                                                                          |
 |------------------------------|------------------------------------------------------------------------------------|
@@ -103,10 +103,59 @@ Esses indicadores permitem análises estratégicas do portfólio de usuários.
 
 ---
 
-## Indicadores criados
+#### Indicadores criados
 - pct_usuarios_ti -> Percentual de usuários da área de TI.  
 - idade_media     -> Média de idade.  
 - total_usuarios  -> Total de usuários.  
 - pct_menos_30    -> Percentual de usuários com menos de 30 anos. 
+
+---
+
+## Questão 2 — Orquestração de Processos (Airflow)
+#### Fluxo de Cobrança Crítico com Lógica de Acúmulo e Parametrização ⚙️
+
+Esta seção apresenta a DAG Airflow desenvolvida para orquestrar o processo de atualização da "Régua de Cobrança", incorporando regras de **acúmulo de dados no final de semana** e processamento em **lote** nos dias úteis.
+
+#### Arquivo incluído (Questão 2)
+
+| Arquivo                                  | Descrição                                                                                                                       |
+|------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
+| **dag_regua_cobranca_parametrizavel.py** | Definição da DAG com lógica de **Branching** (Dia Útil vs. Fim de Semana), **3 tentativas de retry** e **tratamento de erros**. |
+
+---
+
+#### Lógica de Fluxo da DAG
+
+O fluxo implementa uma estratégia de acumulação e processamento em lote para garantir que nenhuma carga no banco ocorra no final de semana, otimizando recursos:
+
+1. **A cada 5 minutos:** Verifica se o arquivo **`pagamentos_d-1.csv`** chegou em `DIR_ORIGEM`. Se não, a DAG encerra (Short-Circuit).
+2. **Processamento:** O arquivo é processado e movido para a pasta de acumulação (**`DIR_PROCESSADOS`**).
+3. **Fim de Semana (Acúmulo):** O fluxo é direcionado ao `end`, deixando o arquivo acumulado em **`DIR_PROCESSADOS`**. **Nenhuma carga no DB ocorre.**
+4. **Dia Útil (Lote):** O fluxo executa em lote:
+    * **Carga no DB:** A tarefa lê **TODOS** os arquivos acumulados em **`DIR_PROCESSADOS`** e os envia ao banco de dados.
+    * **Arquivamento Final:** Após a carga ser bem-sucedida, **TODOS** os arquivos são movidos para **`DIR_CARGA_FINAL`**.
+
+---
+
+#### Estrutura de Diretórios e Fluxo de Dados
+
+| Diretório             | Função                                                                                    |
+|-----------------------|-------------------------------------------------------------------------------------------|
+| **`DIR_ORIGEM`**      | Entrada inicial do arquivo (`pagamentos_d-1.csv`).                                        |
+| **`DIR_PROCESSADOS`** | **Acumulação/Log de Pendentes.** Fonte de dados para a carga no banco durante a semana.   |
+| **`DIR_CARGA_FINAL`** | **Destino final/Histórico.** Arquivamento após a carga em lote ser concluída com sucesso. |
+| **`DIR_ERROS`**       | Quarentena para arquivos que falharam após **3 tentativas** de reexecução.                |
+
+---
+
+#### Parametrização de Execução (Airflow Variables)
+
+A DAG foi configurada para que parâmetros críticos possam ser alterados **sem modificar o código**, utilizando as Variáveis do Airflow (Airflow Variables):
+
+| Variável                              | Padrão        | Descrição                                                                                                               |
+|---------------------------------------|---------------|-------------------------------------------------------------------------------------------------------------------------|
+| **`regua_cobranca_retries`**          | `3`           | Número de vezes que a tarefa deve tentar reexecutar em caso de falha.                                                   |
+| **`regua_cobranca_retry_delay_min`**  | `5`           | Intervalo de espera, em minutos, entre as tentativas (retries).                                                         |
+| **`regua_cobranca_dias_envio_banco`** | `"1,2,3,4,5"` | Dias da semana (ISO: 1=Segunda, 7=Domingo) que devem seguir o fluxo de **carga no banco**. Outros dias apenas acumulam. |
 
 ---
