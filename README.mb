@@ -109,7 +109,7 @@ Esses indicadores permitem análises estratégicas do portfólio de usuários.
 - total_usuarios  -> Total de usuários.  
 - pct_menos_30    -> Percentual de usuários com menos de 30 anos. 
 
----
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 ## Questão 2 — Orquestração de Processos (Airflow)
 #### Fluxo de Cobrança Crítico com Lógica de Acúmulo e Parametrização ⚙️
@@ -158,4 +158,83 @@ A DAG foi configurada para que parâmetros críticos possam ser alterados **sem 
 | **`regua_cobranca_retry_delay_min`**  | `5`           | Intervalo de espera, em minutos, entre as tentativas (retries).                                                         |
 | **`regua_cobranca_dias_envio_banco`** | `"1,2,3,4,5"` | Dias da semana (ISO: 1=Segunda, 7=Domingo) que devem seguir o fluxo de **carga no banco**. Outros dias apenas acumulam. |
 
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+## Questão 3 — Validação de Qualidade e Tratamento de Inconsistências (BigQuery)
+#### Análise de Discrepância de Dados entre Fontes (GCP vs. Local) 
+
+Esta seção aborda o desafio de **comparar e validar dados** carregados em duas fontes distintas (`GCP` e `Local`), identificando e tratando as discrepâncias antes de analisar as inconsistências reais.
+
 ---
+
+### Arquivos incluídos (Questão 3)
+
+| Arquivo                        | Descrição                                                                                                               |
+|--------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| **prc_validation_gcp_lcl.sql** | Procedure SQL que executa a lógica de comparação entre as tabelas GCP e Local, gerando a tabela de inconsistências.     |
+| **script_inconsistencias.sql** | Script de consulta (SQL) para resumir os cenários de inconsistência identificados, gerando as tabelas de resumo abaixo. |
+
+---
+
+### Pontos de Tratamento e Saneamento de Dados
+Antes da comparação final, foram observadas e tratadas cinco discrepâncias entre as fontes de dados (`GCP` e `Local`) que, se não ajustadas, seriam reportadas erroneamente como inconsistências:
+
+1.  **Separador CSV:** O arquivo GCP utiliza vírgula (`,`) como separador, enquanto o arquivo Local utiliza ponto e vírgula (`;`).
+2.  **`code_gender`:** O GCP traz valores longos (`"Male"`, `"Female"`) e o Local, siglas (`"M"`, `"F"`). *Tratamento:* Igualado para siglas de um único caractere para ambas as bases.
+3.  **`amt_income_total`:** O valor no GCP aparenta estar **multiplicado por 100** em relação ao Local. *Tratamento:* O valor do GCP foi **dividido por 100** para padronizar a comparação.
+4.  **`days_birth`:** O campo GCP traz valores positivos e o Local, negativos (padrão em alguns sistemas). *Tratamento:* Os valores do GCP foram **multiplicados por -1** (ou aplicado `ABS` no valor do local) para igualar o sinal.
+5.  **`flag_work_phone`:** O campo no GCP é carregado como `FLOAT`, enquanto no Local é carregado como `INTEGER`. *Tratamento:* Ambos foram tipados para `BOOLEAN` ou `INTEGER` (0/1) para comparação.
+
+---
+
+### Análise de Inconsistências Encontradas
+
+Após o saneamento dos pontos acima, a validação de qualidade identificou uma alta taxa de registros com inconsistências:
+
+| validacao_geral                | qtd         |
+|--------------------------------|-------------|
+| 1 - Não contém inconsistências | 86.978      |
+| 2 - Contém inconsistências     | **354.532** |
+
+#### Cenários Detalhados de Inconsistência
+
+Os registros com inconsistências foram categorizados nos seguintes cenários, indicando a provável causa raiz em cada fonte:
+
+| cenario | validacao_geral            | validacao_faseada                                                                | qtd     |
+|---------|----------------------------|----------------------------------------------------------------------------------|---------|
+| 1       | 2 - Contém inconsistências | `verifica_flag_work_phone`: Null no GCP                                          | 217.363 |
+| 2       | 2 - Contém inconsistências | `verifica_flag_work_phone`: Null no GCP, `verifica_occupation_type`: Null no LCL | 94.075  |
+| 3       | 2 - Contém inconsistências | `verifica_occupation_type`: Null no LCL                                          | 39.043  |
+| 4       | 2 - Contém inconsistências | `verifica_id`: Ausente no GCP                                                    | 4.051   |
+
+---
+
+### Resumo e Conclusões da Investigação
+
+A análise dos cenários aponta para prováveis **falhas de ingestão ou transformação** em ambas as fontes:
+
+#### 1. Inconsistência no `FLAG_WORK_PHONE` (GCP)
+* **Problema:** O campo `flag_work_phone` veio nulo no GCP para a maioria dos registros, mas estava preenchido (True/False) no Local.
+* **Investigação:** Não seria suficiente tratar Nulos como `False`, pois os registros ausentes no GCP possuíam flags diversos (`True` ou `False`) na carga Local. A falha é na **carga do campo no GCP**.
+
+| verifica_flag_work_phone | flag_work_phone_gcp | flag_work_phone_lcl | qtd     |
+|--------------------------|---------------------|---------------------|---------|
+| Null no GCP              | null                | false               | 270.513 |
+| Null no GCP              | null                | true                | 40.925  |
+
+#### 2. Inconsistência no `OCCUPATION_TYPE` (Local)
+* **Problema:** O campo `occupation_type` veio nulo no Local, mas estava preenchido no GCP.
+* **Investigação:** Foi identificado que a carga do GCP preencheu os valores vazios com o *default* **'Without Occupation'**, o que gerou a divergência na contagem. A inconsistência é puramente um **tratamento de Nulos diferente** entre as bases.
+
+| verifica_occupation_type | occupation_type_gcp | occupation_type_lcl | qtd     |
+|--------------------------|---------------------|---------------------|---------|
+| Null no LCL              | Without Occupation  | null                | 133.118 |
+
+#### 3. Registros Ausentes (Cenário 4)
+* **Problema:** Registros presentes no Local, mas ausentes no GCP.
+* **Hipótese:** Diferença no *timing* das cargas.
+* **Recomendação:** Necessário confirmar se a ausência não é devido a falha na carga do GCP, validando com a **data de carga/atualização** (se disponível) ou consultando o sistema de origem.
+
+**Em resumo, os pontos cruciais de atenção para garantir a qualidade dos dados são:**
+1.  **Validar e corrigir a rotina de carga do GCP ou local** para o campo `amt_income_total`.
+2.  **Corrigir a rotina de carga do GCP** para o campo `flag_work_phone`.
+3.  **Validar o fluxo de ingestão** para os registros ausentes no GCP.
