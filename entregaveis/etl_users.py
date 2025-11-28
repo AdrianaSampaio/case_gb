@@ -5,11 +5,11 @@ import os
 from datetime import datetime
 
 # =========================================
-# CONFIGURAÇÃO DO CAMINHO DO BANCO
+# CONFIGURAÇÃO DOS CAMINHOS DOS BANCOS
 # =========================================
-# Garante que o banco será criado na pasta raíz do projeto (case_gb)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(BASE_DIR, "users.db")
+RAW_DB_PATH = os.path.join(BASE_DIR, "raw.db")
+TRUSTED_DB_PATH = os.path.join(BASE_DIR, "trusted.db")
 
 # =========================================
 # 1. BAIXA DADOS DA API
@@ -26,19 +26,20 @@ def fetch_users():
     return data
 
 # =========================================
-# 2. CRIA BANCO E TABELAS
+# 2. CRIA RAW E TRUSTED (DOIS DATASETS)
 # =========================================
-def create_database(db_path=DB_PATH):
+def setup_databases():
 
-    print(f"💾 Criando banco em: {db_path}")
-    conn = sqlite3.connect(db_path)
+    print("📦 Criando datasets raw.db e trusted.db")
+    
+    # Conexão principal (pode ser qualquer uma)
+    conn = sqlite3.connect(os.path.join(BASE_DIR, "dev.db"))
     cur = conn.cursor()
 
-    print("💾 Criando tabelas RAW e TRUSTED...")
-
-    # RAW
+    # Attach RAW
+    cur.execute(f"ATTACH DATABASE '{RAW_DB_PATH}' AS raw;")
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS raw_users (
+        CREATE TABLE IF NOT EXISTS raw.users (
             raw_id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             json_data TEXT,
@@ -46,14 +47,16 @@ def create_database(db_path=DB_PATH):
         );
     """)
 
-    # TRUSTED
-    cur.execute("DROP TABLE IF EXISTS users;")
-    cur.execute("DROP TABLE IF EXISTS professional_info;")
-    cur.execute("DROP TABLE IF EXISTS address;")
-    cur.execute("DROP TABLE IF EXISTS bank;")
+    # Attach TRUSTED
+    cur.execute(f"ATTACH DATABASE '{TRUSTED_DB_PATH}' AS trusted;")
+
+    cur.execute("DROP TABLE IF EXISTS trusted.users;")
+    cur.execute("DROP TABLE IF EXISTS trusted.professional_info;")
+    cur.execute("DROP TABLE IF EXISTS trusted.address;")
+    cur.execute("DROP TABLE IF EXISTS trusted.bank;")
 
     cur.execute("""
-        CREATE TABLE users (
+        CREATE TABLE trusted.users (
             id INTEGER PRIMARY KEY,
             first_name TEXT,
             last_name TEXT,
@@ -65,7 +68,7 @@ def create_database(db_path=DB_PATH):
     """)
 
     cur.execute("""
-        CREATE TABLE professional_info (
+        CREATE TABLE trusted.professional_info (
             user_id INTEGER,
             company TEXT,
             department TEXT,
@@ -75,7 +78,7 @@ def create_database(db_path=DB_PATH):
     """)
 
     cur.execute("""
-        CREATE TABLE address (
+        CREATE TABLE trusted.address (
             user_id INTEGER,
             city TEXT,
             state TEXT,
@@ -86,7 +89,7 @@ def create_database(db_path=DB_PATH):
     """)
 
     cur.execute("""
-        CREATE TABLE bank (
+        CREATE TABLE trusted.bank (
             user_id INTEGER,
             card_type TEXT,
             card_number TEXT,
@@ -108,7 +111,7 @@ def insert_into_raw(conn, users):
 
     for u in users:
         cur.execute("""
-            INSERT INTO raw_users (user_id, json_data, ingestion_timestamp)
+            INSERT INTO raw.users (user_id, json_data, ingestion_timestamp)
             VALUES (?, ?, ?)
         """, (
             u["id"],
@@ -129,10 +132,10 @@ def populate_trusted(conn):
 
     query = """
         SELECT r.user_id, r.json_data
-        FROM raw_users r
+        FROM raw.users r
         INNER JOIN (
             SELECT user_id, MAX(raw_id) AS max_raw
-            FROM raw_users
+            FROM raw.users
             GROUP BY user_id
         ) t
         ON r.user_id = t.user_id AND r.raw_id = t.max_raw
@@ -143,9 +146,9 @@ def populate_trusted(conn):
     for user_id, json_blob in rows:
         u = json.loads(json_blob)
 
-        # USERS
+        # trusted.users
         cur.execute("""
-            INSERT INTO users (id, first_name, last_name, age, gender, email, phone)
+            INSERT INTO trusted.users (id, first_name, last_name, age, gender, email, phone)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             u["id"],
@@ -157,9 +160,9 @@ def populate_trusted(conn):
             u["phone"]
         ))
 
-        # PROFESSIONAL INFO
+        # trusted.professional_info
         cur.execute("""
-            INSERT INTO professional_info (user_id, company, department, title)
+            INSERT INTO trusted.professional_info (user_id, company, department, title)
             VALUES (?, ?, ?, ?)
         """, (
             u["id"],
@@ -168,9 +171,9 @@ def populate_trusted(conn):
             u["company"]["title"]
         ))
 
-        # ADDRESS
+        # trusted.address
         cur.execute("""
-            INSERT INTO address (user_id, city, state, postal_code, address)
+            INSERT INTO trusted.address (user_id, city, state, postal_code, address)
             VALUES (?, ?, ?, ?, ?)
         """, (
             u["id"],
@@ -180,9 +183,9 @@ def populate_trusted(conn):
             u["address"]["address"]
         ))
 
-        # BANK
+        # trusted.bank
         cur.execute("""
-            INSERT INTO bank (user_id, card_type, card_number)
+            INSERT INTO trusted.bank (user_id, card_type, card_number)
             VALUES (?, ?, ?)
         """, (
             u["id"],
@@ -198,10 +201,11 @@ def populate_trusted(conn):
 # =========================================
 if __name__ == "__main__":
     users = fetch_users()
-    conn = create_database()
+    conn = setup_databases()
     insert_into_raw(conn, users)
     populate_trusted(conn)
     conn.close()
 
     print("\n🎉 Pipeline RAW → TRUSTED finalizado com sucesso!")
-    print(f"📂 Banco salvo em: {DB_PATH}")
+    print("📂 RAW em:", RAW_DB_PATH)
+    print("📂 TRUSTED em:", TRUSTED_DB_PATH)
