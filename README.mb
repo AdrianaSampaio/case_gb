@@ -4,8 +4,6 @@
 #### Arquitetura Completa: RAW → TRUSTED → VALIDAÇÕES → INDICADORES
 
 
-Este diretório reúne todos os entregáveis desenvolvidos para responder à **Questão 1**, organizada em duas partes:
-
 1. **Parte 1 — Pipeline RAW → TRUSTED e Validações de Qualidade**  
 2. **Parte 2 — Geração de Indicadores Analíticos via SQL**
 
@@ -16,7 +14,7 @@ O objetivo é demonstrar o fluxo completo de uma **mini arquitetura de dados**, 
 ### Parte 1 — Pipeline RAW → TRUSTED  
 #### Ingestão, Estruturação e Validação da Base de Usuários
 
-A API pública fornece 30 usuários em JSON. Esses dados passam por três etapas fundamentais:
+A API pública fornece 200 usuários em JSON. Esses dados passam por três etapas fundamentais:
 
 - **RAW** (armazenamento bruto, íntegro)  
 - **TRUSTED** (dados limpos e estruturados)  
@@ -30,7 +28,6 @@ A API pública fornece 30 usuários em JSON. Esses dados passam por três etapas
 |------------------------------|------------------------------------------------------------------------|
 | **etl_users.py**             | Ingestão da API, criação do banco SQLite e transformação RAW → TRUSTED |
 | **etl_users_validations.py** | Regras de validação aplicadas sobre a camada TRUSTED                   |
-| **users.db**                 | Banco SQLite contendo tabelas RAW e TRUSTED                            |
 
 ---
 
@@ -99,7 +96,7 @@ Esses indicadores permitem análises estratégicas do portfólio de usuários.
 
 | Arquivo                      | Descrição                                                                          |
 |------------------------------|------------------------------------------------------------------------------------|
-| **etl_users_indicators.sql** | Script SQL que cria uma tabela de indicadores agregados a partir da camada TRUSTED |
+| **indicadores.sql**          | Script SQL que cria uma tabela de indicadores agregados a partir da camada TRUSTED |
 
 ---
 
@@ -154,12 +151,14 @@ A DAG foi configurada para que parâmetros críticos possam ser alterados **sem 
 
 | Variável                              | Padrão        | Descrição                                                                                                               |
 |---------------------------------------|---------------|-------------------------------------------------------------------------------------------------------------------------|
-| **`regua_cobranca_retries`**          | `3`           | Número de vezes que a tarefa deve tentar reexecutar em caso de falha.                                                   |
-| **`regua_cobranca_retry_delay_min`**  | `5`           | Intervalo de espera, em minutos, entre as tentativas (retries).                                                         |
-| **`regua_cobranca_dias_envio_banco`** | `"1,2,3,4,5"` | Dias da semana (ISO: 1=Segunda, 7=Domingo) que devem seguir o fluxo de **carga no banco**. Outros dias apenas acumulam. |
+| **`TENTATIVAS`**                      | `3`           | Número de vezes que a tarefa deve tentar reexecutar em caso de falha.                                                   |
+| **`DELAY_MINUTOS`**                   | `5`           | Intervalo de espera, em minutos, entre as tentativas (retries).                                                         |
+| **`DIAS_FLUXO_BANCO`**                | `"1,2,3,4,5"` | Dias da semana (ISO: 1=Segunda, 7=Domingo) que devem seguir o fluxo de **carga no banco**. Outros dias apenas acumulam. |
+
+
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------
-## Questão 3 — Validação de Qualidade e Tratamento de Inconsistências (BigQuery)
+## Questão 3 — Data Quality e Tratamento de Inconsistências (BigQuery)
 #### Análise de Discrepância de Dados entre Fontes (GCP vs. Local) 
 
 Esta seção aborda o desafio de **comparar e validar dados** carregados em duas fontes distintas (`GCP` e `Local`), identificando e tratando as discrepâncias antes de analisar as inconsistências reais.
@@ -177,7 +176,7 @@ Esta seção aborda o desafio de **comparar e validar dados** carregados em duas
 ---
 
 ### Pontos de Tratamento e Saneamento de Dados
-Antes da comparação final, foram observadas e tratadas cinco discrepâncias entre as fontes de dados (`GCP` e `Local`) que, se não ajustadas, seriam reportadas erroneamente como inconsistências:
+Antes da comparação final, foram observadas e tratadas cinco discrepâncias entre as fontes de dados (`GCP` e `Local`) que, se não ajustadas, possivelmente seriam reportadas erroneamente como inconsistências:
 
 1.  **Separador CSV:** O arquivo GCP utiliza vírgula (`,`) como separador, enquanto o arquivo Local utiliza ponto e vírgula (`;`).
 2.  **`code_gender`:** O GCP traz valores longos (`"Male"`, `"Female"`) e o Local, siglas (`"M"`, `"F"`). *Tratamento:* Igualado para siglas de um único caractere para ambas as bases.
@@ -253,12 +252,13 @@ A procedure avalia, de forma automatizada e granular, a integridade dos dados, c
 2. Integridade de Nulos: Compara a quantidade de registros nulos.
 3. Cardinalidade: Compara a quantidade de registros distintos.
 4. Volume (Row Count): Compara a quantidade total de registros nas tabelas.
+5. Divergências de informação: Compara para cada PK passada no parâmetro a quantidade que possui dados divergentes.
 
-A chamada da procedure exige o caminho completo (project.dataset.table) das tabelas verificadas:
+A chamada da procedure exige o caminho completo (project.dataset.table) das tabelas verificadas e as chaves de cada uma delas:
 
 CALL `casegrupoboticario.dev_zone.pcr_load_validador_tabelas`(
-   'casegrupoboticario.raw_zone.application_record_local', 
-   'casegrupoboticario.raw_zone.application_record_gcp'  
+   'casegrupoboticario.raw_zone.application_record_local', 'id',
+   'casegrupoboticario.raw_zone.application_record_gcp','id'
 );
 
 #### Valor e Benefício
@@ -267,23 +267,23 @@ Embora não atenda a uma verificação detalhada de divergências conceituais, e
 
 Abaixo um modelo de resultado da execução:
 
-|execution_time	                |source_table	                                       |target_table	                                    |column_name	     |src_type |tgt_type |type_status   |src_nulls |tgt_nulls |src_distinct |tgt_distinct |src_count |tgt_count |validation_errors_list	                                                                       |final_status |
-|-------------------------------|------------------------------------------------------|----------------------------------------------------|--------------------|---------|---------|--------------|----------|----------|-------------|-------------|----------|----------|----------------------------------------------------------------------------------------------|-------------|
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|AMT_INCOME_TOTAL    |FLOAT64  |FLOAT64	 |OK	        |0	       |0         |866          |859          |438510    |437459    |Quantidade distinta: 866 vs 859; Contagem total: 438510 vs 437459	                           |ERROR        | 
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|CNT_CHILDREN	     |INT64	   |INT64	 |OK	        |0	       |0         |12           |12           |438510    |437459    |Contagem total: 438510 vs 437459	                                                           |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|CNT_FAM_MEMBERS     |FLOAT64  |FLOAT64	 |OK	        |0	       |0         |13           |13           |438510    |437459    |Contagem total: 438510 vs 437459	                                                           |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|CODE_GENDER	     |STRING   |STRING	 |OK	        |0	       |0         |2            |2            |438510    |437459    |Contagem total: 438510 vs 437459	                                                           |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|DAYS_BIRTH	         |INT64	   |INT64	 |OK	        |0	       |0         |16379        |16365        |438510    |437459    |Quantidade distinta: 16379 vs 16365; Contagem total: 438510 vs 437459	                       |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|DAYS_EMPLOYED	     |INT64	   |INT64	 |OK	        |0	       |0         |9406         |9395         |438510    |437459    |Quantidade distinta: 9406 vs 9395; Contagem total: 438510 vs 437459	                       |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|FLAG_EMAIL	         |INT64	   |INT64	 |OK	        |0	       |0         |2            |2            |438510    |437459    |Contagem total: 438510 vs 437459	                                                           |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|FLAG_MOBIL	         |INT64	   |INT64	 |OK	        |0	       |0         |1            |1            |438510    |437459    |Contagem total: 438510 vs 437459	                                                           |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|FLAG_OWN_CAR	     |BOOL	   |BOOL	 |OK	        |0	       |0         |2            |2            |438510    |437459    |Contagem total: 438510 vs 437459	                                                           |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|FLAG_OWN_REALTY     |BOOL	   |BOOL	 |OK	        |0	       |0         |2            |2            |438510    |437459    |Contagem total: 438510 vs 437459	                                                           |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|FLAG_PHONE	         |INT64	   |INT64	 |OK	        |0	       |0         |2            |2            |438510    |437459    |Contagem total: 438510 vs 437459	                                                           |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|FLAG_WORK_PHONE     |INT64	   |FLOAT64	 |TYPE_MISMATCH |0	       |311438    |2            |2            |438510    |126021    |Tipo de dado: INT64 vs FLOAT64; Valores nulos: 0 vs 311438; Contagem total: 438510 vs 126021  |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|ID	                 |INT64	   |INT64	 |OK	        |0	       |0         |438510       |434459       |438510    |437459    |Quantidade distinta: 438510 vs 434459; Contagem total: 438510 vs 437459	                   |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|NAME_EDUCATION_TYPE |STRING   |STRING	 |OK	        |0	       |0         |5            |4            |438510    |437459    |Quantidade distinta: 5 vs 4; Contagem total: 438510 vs 437459	                               |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|NAME_FAMILY_STATUS	 |STRING   |STRING	 |OK	        |0	       |0         |5            |5            |438510    |437459    |Contagem total: 438510 vs 437459	                                                           |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|NAME_HOUSING_TYPE	 |STRING   |STRING	 |OK	        |0	       |0         |6            |6            |438510    |437459    |Contagem total: 438510 vs 437459	                                                           |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|NAME_INCOME_TYPE	 |STRING   |STRING	 |OK	        |0	       |0         |5            |5            |438510    |437459    |Contagem total: 438510 vs 437459	                                                           |ERROR        |
-|2025-11-27 21:32:08.913632 UTC	|casegrupoboticario.test_zone.application_record_local |casegrupoboticario.test_zone.application_record_gcp	|OCCUPATION_TYPE	 |STRING   |STRING	 |OK	        |134193    |0         |18           |19           |304317    |437459    |Valores nulos: 134193 vs 0; Quantidade distinta: 18 vs 19; Contagem total: 304317 vs 437459   |ERROR        |
+|execution_time	                |source_table	                                        |target_table	                                        |column_name         |src_type |tgt_type |type_status  |src_nulls |tgt_nulls |src_distinct |tgt_distinct |src_count |tgt_count |validation_errors_list                                                                                                      |final_status |
+|-------------------------------|-------------------------------------------------------|-------------------------------------------------------|--------------------|---------|---------|-------------|----------|----------|-------------|-------------|----------|----------|----------------------------------------------------------------------------------------------------------------------------|-------------|
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|AMT_INCOME_TOTAL	 |FLOAT64  |FLOAT64	 |OK	       |0	      |0	     |866          |859	         |438510	|437459	   |Distintos: 866 vs 859; Contagem total: 438510 vs 437459; Divergências por PK: 441510	                                    |ERROR        |  
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|CNT_CHILDREN	     |INT64	   |INT64	 |OK	       |0	      |0	     |12	       |12	         |438510	|437459	   |Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                                                |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|CNT_FAM_MEMBERS	 |FLOAT64  |FLOAT64	 |OK	       |0	      |0	     |13	       |13	         |438510	|437459	   |Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                                                |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|CODE_GENDER	     |STRING   |STRING	 |OK	       |0	      |0	     |2	           |2	         |438510	|437459	   |Contagem total: 438510 vs 437459; Divergências por PK: 441510	                                                            |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|DAYS_BIRTH	         |INT64	   |INT64	 |OK	       |0	      |0	     |16379	       |16365	     |438510	|437459	   |Distintos: 16379 vs 16365; Contagem total: 438510 vs 437459; Divergências por PK: 441510	                                |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|DAYS_EMPLOYED	     |INT64	   |INT64	 |OK	       |0	      |0	     |9406	       |9395         |438510	|437459	   |Distintos: 9406 vs 9395; Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                    |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|FLAG_EMAIL	         |INT64	   |INT64	 |OK	       |0	      |0	     |2	           |2	         |438510	|437459	   |Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                                                |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|FLAG_MOBIL	         |INT64	   |INT64	 |OK	       |0	      |0	     |1	           |1	         |38510	    |437459	   |Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                                                |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|FLAG_OWN_CAR	     |BOOL	   |BOOL	 |OK	       |0	      |0	     |2	           |2	         |438510	|437459	   |Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                                                |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|FLAG_OWN_REALTY	 |BOOL	   |BOOL	 |OK	       |0	      |0	     |2	           |2	         |438510	|437459	   |Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                                                |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|FLAG_PHONE	         |INT64	   |INT64	 |OK	       |0	      |0	     |2	           |2	         |438510	|437459	   |Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                                                |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|FLAG_WORK_PHONE	 |INT64	   |FLOAT64	 |TYPE_MISMATCH|0	      |311438	 |2	           |2	         |438510	|126021	   |Tipo de dado: INT64 vs FLOAT64; Valores nulos: 0 vs 311438; Contagem total: 438510 vs 126021; Divergências por PK: 315489	|ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|ID	                 |INT64	   |INT64	 |OK	       |0	      |0	     |438510       |434459       |438510	|437459	   |Distintos: 438510 vs 434459; Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|NAME_EDUCATION_TYPE |STRING   |STRING	 |OK	       |0	      |0	     |5	           |4	         |438510	|437459	   |Distintos: 5 vs 4; Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                            |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|NAME_FAMILY_STATUS	 |STRING   |STRING	 |OK	       |0	      |0	     |5	           |5	         |438510	|437459	   |Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                                                |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|NAME_HOUSING_TYPE	 |STRING   |STRING	 |OK	       |0	      |0	     |6	           |6	         |438510	|437459	   |Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                                                |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|NAME_INCOME_TYPE	 |STRING   |STRING	 |OK	       |0	      |0	     |5	           |5	         |438510	|437459	   |Contagem total: 438510 vs 437459; Divergências por PK: 4051	                                                                |ERROR        |
+|2025-11-29 20:45:50.886559 UTC	|casegrupoboticario.test_zone.application_record_local	|casegrupoboticario.test_zone.application_record_gcp	|OCCUPATION_TYPE	 |STRING   |STRING	 |OK	       |134193    |0	     |18	       |19	         |304317	|437459	   |Valores nulos: 134193 vs 0; Distintos: 18 vs 19; Contagem total: 304317 vs 437459; Divergências por PK: 135157	            |ERROR        |
