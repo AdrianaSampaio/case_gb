@@ -16,7 +16,7 @@ TRUSTED_DB_PATH = os.path.join(BASE_DIR, "trusted.db")
 # =========================================
 def fetch_users():
     print("📡 Lendo API https://dummyjson.com/users ...")
-    response = requests.get("https://dummyjson.com/users?limit=200")
+    response = requests.get("https://dummyjson.com/users?limit=300")
 
     if response.status_code != 200:
         raise Exception("Erro ao consultar API")
